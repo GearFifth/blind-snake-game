@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blind Snake Game Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        #test-log {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: monospace;
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: #111827;
+            border: 1px solid #374151;
+            padding: 1rem;
+            border-radius: 0.5rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl bg-gray-800 rounded-lg shadow-xl p-6 space-y-4">
+        <h1 class="text-3xl font-bold text-center text-cyan-400">Blind Snake Game Simulator</h1>
+        <p class="text-center text-gray-400">A visualizer for a blind search strategy on an unknown toroidal grid.</p>
+
+        <!-- Controls -->
+        <div class="flex flex-wrap justify-center items-center gap-4 p-4 bg-gray-700/50 rounded-lg">
+            <div class="flex items-center gap-2">
+                <label for="widthInput" class="font-semibold">Width (A):</label>
+                <input type="number" id="widthInput" value="30" class="bg-gray-900 rounded-md p-2 w-24 text-center focus:outline-none focus:ring-2 focus:ring-cyan-500">
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="heightInput" class="font-semibold">Height (B):</label>
+                <input type="number" id="heightInput" value="30" class="bg-gray-900 rounded-md p-2 w-24 text-center focus:outline-none focus:ring-2 focus:ring-cyan-500">
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="speedInput" class="font-semibold" title="Delay in milliseconds per step">Delay:</label>
+                <input type="range" id="speedInput" min="0" max="50" value="0" class="w-24 cursor-pointer">
+            </div>
+            <button id="startButton" class="bg-cyan-500 hover:bg-cyan-600 text-gray-900 font-bold py-2 px-6 rounded-lg transition-colors">Start Game</button>
+            <button id="testButton" class="bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold py-2 px-6 rounded-lg transition-colors">Run Automated Tests</button>
+        </div>
+
+        <!-- Status Display -->
+        <div id="status" class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+            <div class="bg-gray-700 p-3 rounded-lg">
+                <p class="text-gray-400 text-sm">Moves Made</p>
+                <p id="movesCount" class="text-2xl font-semibold">0</p>
+            </div>
+            <div class="bg-gray-700 p-3 rounded-lg">
+                <p class="text-gray-400 text-sm">Max Moves (35 * S)</p>
+                <p id="maxMoves" class="text-2xl font-semibold">0</p>
+            </div>
+            <div class="bg-gray-700 p-3 rounded-lg">
+                <p class="text-gray-400 text-sm">Status</p>
+                <p id="gameStatus" class="text-2xl font-semibold text-gray-400">Idle</p>
+            </div>
+        </div>
+
+        <!-- Game Canvas -->
+        <div class="bg-gray-900 rounded-lg overflow-hidden aspect-video">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+
+        <!-- Automated Test Log -->
+        <div id="test-log-container" class="space-y-2 pt-4">
+             <h3 class="text-xl font-bold text-center text-gray-300">Automated Test Log</h3>
+             <pre id="test-log" class="text-sm">Ready to run tests...</pre>
+        </div>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const testButton = document.getElementById('testButton');
+        const widthInput = document.getElementById('widthInput');
+        const heightInput = document.getElementById('heightInput');
+        const speedInput = document.getElementById('speedInput');
+        const movesCountEl = document.getElementById('movesCount');
+        const maxMovesEl = document.getElementById('maxMoves');
+        const gameStatusEl = document.getElementById('gameStatus');
+        const testLogEl = document.getElementById('test-log');
+
+        // --- Game State ---
+        let gridWidth, gridHeight, areaS;
+        let snake = { x: 0, y: 0 };
+        let apple = { x: 0, y: 0 };
+        let moveCount = 0;
+        let maxMoves = 0;
+        let isGameRunning = false;
+        let cellSize = 20;
+        let visitedCells = new Set();
+        let animationFrameId;
+
+        // --- Game Engine ---
+        function setupCanvas() {
+            const container = canvas.parentElement;
+            const size = Math.min(container.clientWidth, container.clientHeight * (16/9));
+            canvas.width = size;
+            canvas.height = size * (9/16);
+            if(gridWidth && gridHeight) {
+                 cellSize = Math.min(canvas.width / gridWidth, canvas.height / gridHeight);
+            }
+        }
+
+        function initializeGame() {
+            if (isGameRunning) return;
+            gridWidth = parseInt(widthInput.value);
+            gridHeight = parseInt(heightInput.value);
+            if (gridWidth <= 0 || gridHeight <= 0) {
+                alert("Width and Height must be positive integers.");
+                return;
+            }
+            areaS = gridWidth * gridHeight;
+            maxMoves = 35 * areaS;
+            moveCount = 0;
+            isGameRunning = true;
+            visitedCells.clear();
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+
+            snake.x = Math.floor(Math.random() * gridWidth);
+            snake.y = Math.floor(Math.random() * gridHeight);
+            visitedCells.add(`${snake.x},${snake.y}`);
+
+            do {
+                apple.x = Math.floor(Math.random() * gridWidth);
+                apple.y = Math.floor(Math.random() * gridHeight);
+            } while (apple.x === snake.x && apple.y === snake.y);
+
+            startButton.disabled = true;
+            testButton.disabled = true;
+            startButton.textContent = "Running...";
+            gameStatusEl.textContent = "Playing";
+            gameStatusEl.className = "text-2xl font-semibold text-yellow-400";
+            movesCountEl.textContent = moveCount;
+            maxMovesEl.textContent = maxMoves.toLocaleString();
+
+            setupCanvas();
+            playGame(true); // Play with visuals
+        }
+
+        function drawGame() {
+            // Calculate the total dimensions of the grid to be drawn
+            const renderWidth = gridWidth * cellSize;
+            const renderHeight = gridHeight * cellSize;
+
+            // Calculate the offsets to center the grid on the canvas
+            const offsetX = (canvas.width - renderWidth) / 2;
+            const offsetY = (canvas.height - renderHeight) / 2;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw visited cells
+            ctx.fillStyle = 'rgba(0, 150, 255, 0.2)';
+            for (const cell of visitedCells) {
+                const [x, y] = cell.split(',').map(Number);
+                ctx.fillRect(offsetX + x * cellSize, offsetY + y * cellSize, cellSize, cellSize);
+            }
+
+            // Draw Apple
+            ctx.fillStyle = 'hsl(0, 100%, 60%)';
+            ctx.fillRect(offsetX + apple.x * cellSize, offsetY + apple.y * cellSize, cellSize, cellSize);
+
+            // Draw Snake
+            ctx.fillStyle = 'hsl(120, 100%, 60%)';
+            ctx.fillRect(offsetX + snake.x * cellSize, offsetY + snake.y * cellSize, cellSize, cellSize);
+        }
+
+        function updateSnakePosition(command) {
+            switch (command) {
+                case "UP":    snake.y = (snake.y - 1 + gridHeight) % gridHeight; break;
+                case "DOWN":  snake.y = (snake.y + 1) % gridHeight; break;
+                case "LEFT":  snake.x = (snake.x - 1 + gridWidth) % gridWidth; break;
+                case "RIGHT": snake.x = (snake.x + 1) % gridWidth; break;
+            }
+        }
+
+        function endGame(won) {
+            isGameRunning = false;
+            startButton.disabled = false;
+            testButton.disabled = false;
+            startButton.textContent = "Start Game";
+            gameStatusEl.textContent = won ? "WON!" : "LOST";
+            gameStatusEl.className = `text-2xl font-semibold ${won ? 'text-green-400' : 'text-red-400'}`;
+            if(animationFrameId) drawGame();
+        }
+
+        // --- Player Strategy (The Blind Algorithm) ---
+
+        function sendSignal(command, isVisual) {
+            if (!isGameRunning) return true;
+            moveCount++;
+            updateSnakePosition(command);
+            if (isVisual) {
+                 visitedCells.add(`${snake.x},${snake.y}`);
+                 movesCountEl.textContent = moveCount.toLocaleString();
+            }
+
+            if (snake.x === apple.x && snake.y === apple.y) {
+                if (isVisual) endGame(true);
+                return true;
+            }
+
+            if (moveCount >= maxMoves) {
+                if(isVisual) endGame(false);
+                return true;
+            }
+            return false;
+        }
+
+        async function playGame(isVisual = false) {
+            async function* rectangularSpiralGenerator(p, q, growthFn) {
+                const moves = [
+                    { dir: "RIGHT", factor: p }, { dir: "DOWN", factor: q },
+                    { dir: "LEFT", factor: p }, { dir: "UP", factor: q }
+                ];
+                let legLength = 1;
+                let moveIndex = 0;
+                while (true) {
+                    const move1 = moves[moveIndex];
+                    for (let i = 0; i < legLength * move1.factor; i++) yield move1.dir;
+                    const move2 = moves[moveIndex + 1];
+                    for (let i = 0; i < legLength * move2.factor; i++) yield move2.dir;
+
+                    legLength = growthFn(legLength);
+
+                    moveIndex = (moveIndex + 2) % 4;
+                }
+            }
+
+            // 3 types of growth functions
+            const arithmeticGrowth = (len) => len + 1;
+            const jitteryGrowth = (len) => Math.floor(len * 1.5) + 1;
+            const geometricGrowth = (len) => len * 2;
+
+            const spiralParams = [
+                // Slow, dense spirals for square-like grids
+                { p: 1, q: 1, fn: arithmeticGrowth },
+                { p: 2, q: 1, fn: arithmeticGrowth },
+                { p: 1, q: 2, fn: arithmeticGrowth },
+                // Medium-growth spirals for balance
+                { p: 4, q: 1, fn: jitteryGrowth },
+                { p: 1, q: 4, fn: jitteryGrowth },
+                // Fast, sparse spirals for extreme aspect ratios
+                { p: 8, q: 1, fn: geometricGrowth },
+                { p: 1, q: 8, fn: geometricGrowth }
+            ];
+
+            // Array of 7 generators - one for each spiral
+            const spirals = spiralParams.map(p => rectangularSpiralGenerator(p.p, p.q, p.fn));
+            let currentSpiralIndex = 0;
+
+            if (isVisual) {
+                let lastDrawTime = 0;
+                // Take just one step from each of the seven spirals in a repeating cycle
+                async function gameLoop(timestamp) {
+                    if (!isGameRunning) return;
+                    const speed = parseInt(speedInput.value);
+                    if (speed > 0 && timestamp - lastDrawTime < speed) {
+                        animationFrameId = requestAnimationFrame(gameLoop);
+                        return;
+                    }
+
+                    const currentSpiral = spirals[currentSpiralIndex];
+                    const moveResult = await currentSpiral.next();
+                    if (sendSignal(moveResult.value, true)) return;
+                    currentSpiralIndex = (currentSpiralIndex + 1) % spirals.length;
+                    drawGame();
+                    lastDrawTime = timestamp;
+                    animationFrameId = requestAnimationFrame(gameLoop);
+                }
+                animationFrameId = requestAnimationFrame(gameLoop);
+            } else {
+                // non-visual mode for fast testing
+                let movesSinceLastYield = 0;
+                while (isGameRunning) {
+                    const currentSpiral = spirals[currentSpiralIndex];
+                    const moveResult = await currentSpiral.next();
+                    if (sendSignal(moveResult.value, false)) {
+                         isGameRunning = false;
+                    }
+                    currentSpiralIndex = (currentSpiralIndex + 1) % spirals.length;
+
+                    //Prevent browser from freezing during heavy computations
+                    movesSinceLastYield++;
+                    if (movesSinceLastYield > 50000) {
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                        movesSinceLastYield = 0;
+                    }
+                }
+                return { won: snake.x === apple.x && snake.y === apple.y, moves: moveCount, maxMoves: maxMoves };
+            }
+        }
+
+        // --- Automated Testing ---
+        async function runAutomatedTests() {
+             if (isGameRunning) return;
+             startButton.disabled = true;
+             testButton.disabled = true;
+             testLogEl.textContent = "Starting automated tests...\n\n";
+
+             const testCases = [
+                { w: 5, h: 5, name: "Tiny Square"},
+                { w: 30, h: 30, name: "Square" },
+                { w: 32, h: 32, name: "Power of 2 Square"},
+                { w: 100, h: 50, name: "Standard Rectangle" },
+                { w: 71, h: 23, name: "Irregular Primes" },
+                { w: 100, h: 100, name: "Large Square"},
+                { w: 10, h: 200, name: "Medium Tall"},
+                { w: 1, h: 500, name: "Tall & Thin" },
+                { w: 500, h: 1, name: "Wide & Short" },
+                { w: 1000, h: 1, name: "Extreme Wide" },
+                { w: 1, h: 1000, name: "Extreme Tall" },
+                { w: 316, h: 316, name: "Near Sqrt(S_max)"},
+                { w: 997, h: 991, name: "Large Prime Grid (Stress Test)" }
+             ];
+             const runsPerCase = 20;
+
+             for (const test of testCases) {
+                 let wins = 0;
+                 let totalMoves = 0;
+                 let failedRuns = 0;
+                 testLogEl.textContent += `--- Testing ${test.name} (${test.w}x${test.h}) ---\n`;
+                 for (let i = 0; i < runsPerCase; i++) {
+                     if (failedRuns > 0) continue;
+
+                     gridWidth = test.w;
+                     gridHeight = test.h;
+                     areaS = gridWidth * gridHeight;
+                     if (areaS > 1000000) {
+                         testLogEl.textContent += `  Skipping ${test.w}x${test.h}: Area > 1,000,000\n`;
+                         wins = runsPerCase;
+                         break;
+                     }
+                     maxMoves = 35 * areaS;
+                     moveCount = 0;
+                     isGameRunning = true;
+                     snake.x = Math.floor(Math.random() * gridWidth);
+                     snake.y = Math.floor(Math.random() * gridHeight);
+                     do {
+                         apple.x = Math.floor(Math.random() * gridWidth);
+                         apple.y = Math.floor(Math.random() * gridHeight);
+                     } while (apple.x === snake.x && apple.y === snake.y);
+
+                     const result = await playGame(false);
+
+                     if (result.won) {
+                        wins++;
+                     } else {
+                        failedRuns++;
+                     }
+                     totalMoves += result.moves;
+                     testLogEl.textContent += `  Run ${i+1}: ${result.won ? 'WIN' : 'FAIL'} in ${result.moves.toLocaleString()} moves (${(100 * result.moves / result.maxMoves).toFixed(2)}% of limit)\n`;
+                 }
+                 testLogEl.textContent += `Result: ${wins}/${runsPerCase} wins. Avg Moves: ${(totalMoves/runsPerCase).toLocaleString()}\n\n`;
+             }
+             testLogEl.textContent = "--- All tests complete! ---\n\n" + testLogEl.textContent;
+             startButton.disabled = false;
+             testButton.disabled = false;
+        }
+
+        // --- Event Listeners ---
+        startButton.addEventListener('click', initializeGame);
+        testButton.addEventListener('click', runAutomatedTests);
+        window.addEventListener('resize', () => {
+             setupCanvas();
+             if (isGameRunning) drawGame();
+        });
+
+        setupCanvas();
+    </script>
+</body>
+</html>
+
